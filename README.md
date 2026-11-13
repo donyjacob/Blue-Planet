@@ -9,6 +9,7 @@ Share a 6-character room code with friends around the world. Everyone’s local 
 - Live world clocks with awake / stretch / sleeping status
 - Golden Window scheduler with 24-hour overlap grid
 - Lock a call time, copy invites, download `.ics`
+- Free in-room video via Jitsi Meet (same meeting for everyone with the room code)
 
 ## Local development
 

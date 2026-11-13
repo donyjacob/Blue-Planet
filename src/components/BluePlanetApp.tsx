@@ -72,6 +72,14 @@ function copyText(text: string) {
   void navigator.clipboard?.writeText(text);
 }
 
+/** Stable free Jitsi room shared by everyone with the same Blue Planet code. */
+function jitsiMeetingUrl(roomCode: string, displayName?: string): string {
+  const meetingId = `BluePlanet${roomCode.replace(/[^A-Za-z0-9]/g, "")}`;
+  const base = `https://meet.jit.si/${meetingId}`;
+  if (!displayName?.trim()) return base;
+  return `${base}#userInfo.displayName="${encodeURIComponent(displayName.trim())}"`;
+}
+
 export function BluePlanetApp() {
   const [entryMode, setEntryMode] = useState<"join" | "create">("join");
   const [userName, setUserName] = useState("");
@@ -89,6 +97,7 @@ export function BluePlanetApp() {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [locationOpen, setLocationOpen] = useState(false);
   const [friendOpen, setFriendOpen] = useState(false);
+  const [videoOpen, setVideoOpen] = useState(false);
   const [modalLocation, setModalLocation] = useState<City | null>(null);
   const [friendName, setFriendName] = useState("");
   const [friendLocation, setFriendLocation] = useState<City>(
@@ -404,7 +413,12 @@ export function BluePlanetApp() {
     setMyId(null);
     setIsDemo(false);
     setSelectedUtcHour(null);
+    setVideoOpen(false);
   };
+
+  const myDisplayName = members.find((m) => m.id === myId)?.name || userName.trim() || "Friend";
+  const videoUrl = room ? jitsiMeetingUrl(room.code, myDisplayName) : "";
+  const videoShareUrl = room ? jitsiMeetingUrl(room.code) : "";
 
   const lockSelectedHour = async () => {
     if (selectedUtcHour === null || !room) return;
@@ -587,7 +601,7 @@ export function BluePlanetApp() {
       `DTSTART:${fmt(start)}`,
       `DTEND:${fmt(end)}`,
       `SUMMARY:Blue Planet Catch-Up (${room.name})`,
-      `DESCRIPTION:Global call scheduled via Blue Planet (Room Code: ${room.code}).`,
+      `DESCRIPTION:Global call scheduled via Blue Planet (Room Code: ${room.code}). Video: ${jitsiMeetingUrl(room.code)}`,
       "END:VEVENT",
       "END:VCALENDAR",
     ].join("\r\n");
@@ -772,6 +786,15 @@ export function BluePlanetApp() {
             </div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
               <button
+                className="btn btn-primary"
+                onClick={() => {
+                  setVideoOpen(true);
+                  showToast("Video room ready — friends with this code join the same call.", "success");
+                }}
+              >
+                {videoOpen ? "Video call open" : "Start video call"}
+              </button>
+              <button
                 className="btn btn-secondary"
                 onClick={() => {
                   const me = members.find((m) => m.id === myId);
@@ -789,10 +812,15 @@ export function BluePlanetApp() {
                 Add friend manually
               </button>
               <button
-                className="btn btn-primary"
+                className="btn btn-secondary"
                 onClick={() => {
                   copyText(
-                    `Join our Blue Planet room "${room.name}"!\nShared Room Code: ${room.code}\nEnter the code so we can sync our time zones and lock in our catch-up call.`,
+                    [
+                      `Join our Blue Planet room "${room.name}"!`,
+                      `Shared Room Code: ${room.code}`,
+                      `Video call: ${videoShareUrl}`,
+                      `Enter the code so we can sync time zones — or jump straight into the video link.`,
+                    ].join("\n"),
                   );
                   showToast("Invite message copied!", "success");
                 }}
@@ -801,6 +829,45 @@ export function BluePlanetApp() {
               </button>
             </div>
           </section>
+
+          {videoOpen && (
+            <section className="video-panel section">
+              <div className="video-panel-head">
+                <div>
+                  <h3 style={{ margin: 0, fontFamily: "var(--font-display)", letterSpacing: "-0.03em" }}>
+                    Group video call
+                  </h3>
+                  <p className="muted" style={{ margin: "0.25rem 0 0" }}>
+                    Free via Jitsi — anyone in room <strong style={{ fontFamily: "var(--font-mono)" }}>{room.code}</strong> lands in the same meeting.
+                  </p>
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
+                  <button
+                    className="btn btn-secondary"
+                    onClick={() => {
+                      copyText(videoShareUrl);
+                      showToast("Video link copied!", "success");
+                    }}
+                  >
+                    Copy video link
+                  </button>
+                  <a className="btn btn-secondary" href={videoUrl} target="_blank" rel="noreferrer">
+                    Open in new tab
+                  </a>
+                  <button className="btn btn-ghost" onClick={() => setVideoOpen(false)}>
+                    Hide call
+                  </button>
+                </div>
+              </div>
+              <iframe
+                className="video-frame"
+                title={`Blue Planet video call ${room.code}`}
+                src={videoUrl}
+                allow="camera; microphone; fullscreen; display-capture; autoplay; clipboard-write"
+                allowFullScreen
+              />
+            </section>
+          )}
 
           {lockedSlot && (
             <section className="banner locked-banner section">
@@ -821,11 +888,21 @@ export function BluePlanetApp() {
                 <button
                   className="btn btn-primary"
                   onClick={() => {
+                    setVideoOpen(true);
+                    showToast("Joining the room video call…", "success");
+                  }}
+                >
+                  Join video call
+                </button>
+                <button
+                  className="btn btn-secondary"
+                  onClick={() => {
                     copyText(
                       [
                         `Blue Planet Group Call: ${room.name}`,
                         `Room Code: ${room.code}`,
                         `Time: ${String(room.lockedUtcHour).padStart(2, "0")}:00 UTC`,
+                        `Video: ${videoShareUrl}`,
                         "",
                         "Local Times for Everyone:",
                         ...lockedSlot.memberBreakdown.map(
