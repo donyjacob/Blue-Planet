@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getRoomSnapshot, updateLockedHour } from "@/lib/rooms";
+import { getRoomSnapshot, updateRoom } from "@/lib/rooms";
 
 export const runtime = "nodejs";
 
@@ -24,11 +24,23 @@ export async function PATCH(request: Request, { params }: Params) {
     const { code } = await params;
     const token = request.headers.get("x-member-token");
     const body = await request.json();
-    const locked =
-      body.lockedUtcHour === null || body.lockedUtcHour === undefined
-        ? null
-        : Number(body.lockedUtcHour);
-    const room = await updateLockedHour(code, token, locked);
+    const patch: { lockedUtcHour?: number | null; meetUrl?: string | null } = {};
+
+    if ("lockedUtcHour" in body) {
+      patch.lockedUtcHour =
+        body.lockedUtcHour === null || body.lockedUtcHour === undefined
+          ? null
+          : Number(body.lockedUtcHour);
+    }
+    if ("meetUrl" in body) {
+      patch.meetUrl = body.meetUrl === undefined ? undefined : body.meetUrl;
+    }
+
+    if (patch.lockedUtcHour === undefined && patch.meetUrl === undefined) {
+      return NextResponse.json({ error: "Nothing to update" }, { status: 400 });
+    }
+
+    const room = await updateRoom(code, token, patch);
     return NextResponse.json({ room });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to update room";

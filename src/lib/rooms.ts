@@ -5,6 +5,7 @@ export type RoomRow = {
   code: string;
   name: string;
   locked_utc_hour: number | null;
+  meet_url: string | null;
   created_at: string | Date;
 };
 
@@ -34,6 +35,7 @@ export type PublicRoom = {
   code: string;
   name: string;
   lockedUtcHour: number | null;
+  meetUrl: string | null;
 };
 
 const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -72,7 +74,32 @@ function toPublicRoom(row: RoomRow): PublicRoom {
     code: row.code,
     name: row.name,
     lockedUtcHour: row.locked_utc_hour,
+    meetUrl: row.meet_url ?? null,
   };
+}
+
+/** Accept only https://meet.google.com/... links (no open redirects). */
+export function sanitizeMeetUrl(value: unknown): string | null {
+  if (value === null || value === undefined || value === "") return null;
+  const raw = sanitizeText(value, 500);
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error("Invalid Google Meet link");
+  }
+  if (parsed.protocol !== "https:" || parsed.hostname !== "meet.google.com") {
+    throw new Error("Invalid Google Meet link");
+  }
+  const path = parsed.pathname.replace(/\/+$/, "") || "/";
+  if (path === "/" || path.length < 5) {
+    throw new Error("Invalid Google Meet link");
+  }
+  // Typical codes: /abc-defg-hij or /lookup/...
+  if (!/^\/(lookup\/[A-Za-z0-9_-]+|[a-z0-9]{2,4}-[a-z0-9]{3,5}-[a-z0-9]{2,4})$/i.test(path)) {
+    throw new Error("Invalid Google Meet link");
+  }
+  return `https://meet.google.com${path}`;
 }
 
 function sanitizeText(value: unknown, max: number): string {
@@ -216,27 +243,52 @@ export async function requireMember(
   return rows[0]!;
 }
 
+export async function updateRoom(
+  codeRaw: string,
+  token: string | null,
+  patch: { lockedUtcHour?: number | null; meetUrl?: string | null },
+): Promise<PublicRoom> {
+  await requireMember(codeRaw, token);
+  const code = sanitizeText(codeRaw, 8).toUpperCase();
+
+  if (patch.lockedUtcHour !== undefined) {
+    const lockedUtcHour = patch.lockedUtcHour;
+    if (
+      lockedUtcHour !== null &&
+      (!Number.isInteger(lockedUtcHour) || lockedUtcHour < 0 || lockedUtcHour > 23)
+    ) {
+      throw new Error("Invalid hour");
+    }
+    const rows = await sql<RoomRow>(
+      "update rooms set locked_utc_hour = $2 where code = $1 returning *",
+      [code, lockedUtcHour],
+    );
+    if (rows.length === 0) throw new Error("Room not found");
+    if (patch.meetUrl === undefined) return toPublicRoom(rows[0]!);
+  }
+
+  if (patch.meetUrl !== undefined) {
+    const meetUrl = sanitizeMeetUrl(patch.meetUrl);
+    const rows = await sql<RoomRow>(
+      "update rooms set meet_url = $2 where code = $1 returning *",
+      [code, meetUrl],
+    );
+    if (rows.length === 0) throw new Error("Room not found");
+    return toPublicRoom(rows[0]!);
+  }
+
+  const rooms = await sql<RoomRow>("select * from rooms where code = $1", [code]);
+  if (rooms.length === 0) throw new Error("Room not found");
+  return toPublicRoom(rooms[0]!);
+}
+
+/** @deprecated Prefer updateRoom — kept for call sites that only lock a time. */
 export async function updateLockedHour(
   codeRaw: string,
   token: string | null,
   lockedUtcHour: number | null,
 ): Promise<PublicRoom> {
-  await requireMember(codeRaw, token);
-  const code = sanitizeText(codeRaw, 8).toUpperCase();
-
-  if (
-    lockedUtcHour !== null &&
-    (!Number.isInteger(lockedUtcHour) || lockedUtcHour < 0 || lockedUtcHour > 23)
-  ) {
-    throw new Error("Invalid hour");
-  }
-
-  const rows = await sql<RoomRow>(
-    "update rooms set locked_utc_hour = $2 where code = $1 returning *",
-    [code, lockedUtcHour],
-  );
-  if (rows.length === 0) throw new Error("Room not found");
-  return toPublicRoom(rows[0]!);
+  return updateRoom(codeRaw, token, { lockedUtcHour });
 }
 
 export async function updateMyLocation(

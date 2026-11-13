@@ -25,6 +25,7 @@ type Room = {
   code: string;
   name: string;
   lockedUtcHour: number | null;
+  meetUrl: string | null;
 };
 
 type Toast = { id: number; message: string; type: "info" | "success" | "error" };
@@ -98,6 +99,9 @@ export function BluePlanetApp() {
   const [locationOpen, setLocationOpen] = useState(false);
   const [friendOpen, setFriendOpen] = useState(false);
   const [videoOpen, setVideoOpen] = useState(false);
+  const [meetDraft, setMeetDraft] = useState("");
+  const [meetBusy, setMeetBusy] = useState(false);
+  const [showJitsi, setShowJitsi] = useState(false);
   const [modalLocation, setModalLocation] = useState<City | null>(null);
   const [friendName, setFriendName] = useState("");
   const [friendLocation, setFriendLocation] = useState<City>(
@@ -367,7 +371,12 @@ export function BluePlanetApp() {
       updatedAt: 1,
     };
     enterRoomState({
-      room: { code: "PLANET", name: "Global Friends Demo Crew", lockedUtcHour: null },
+      room: {
+        code: "PLANET",
+        name: "Global Friends Demo Crew",
+        lockedUtcHour: null,
+        meetUrl: null,
+      },
       members: [
         me,
         {
@@ -414,11 +423,48 @@ export function BluePlanetApp() {
     setIsDemo(false);
     setSelectedUtcHour(null);
     setVideoOpen(false);
+    setShowJitsi(false);
+    setMeetDraft("");
   };
 
   const myDisplayName = members.find((m) => m.id === myId)?.name || userName.trim() || "Friend";
-  const videoUrl = room ? jitsiMeetingUrl(room.code, myDisplayName) : "";
-  const videoShareUrl = room ? jitsiMeetingUrl(room.code) : "";
+  const jitsiUrl = room ? jitsiMeetingUrl(room.code, myDisplayName) : "";
+  const jitsiShareUrl = room ? jitsiMeetingUrl(room.code) : "";
+  const primaryVideoUrl = room?.meetUrl || jitsiShareUrl;
+
+  const saveMeetUrl = async (raw: string | null) => {
+    if (!room) return;
+    if (isDemo) {
+      setRoom({ ...room, meetUrl: raw });
+      setMeetDraft(raw || "");
+      showToast(raw ? "Google Meet link saved for this demo room." : "Google Meet link cleared.", "success");
+      return;
+    }
+    setMeetBusy(true);
+    try {
+      const res = await fetch(`/api/rooms/${room.code}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          "x-member-token": memberToken || "",
+        },
+        body: JSON.stringify({ meetUrl: raw }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to save Meet link");
+      setRoom(data.room);
+      setMeetDraft(data.room.meetUrl || "");
+      showToast(raw ? "Google Meet link shared with the room!" : "Google Meet link cleared.", "success");
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Failed to save Meet link", "error");
+    } finally {
+      setMeetBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    if (room?.meetUrl) setMeetDraft(room.meetUrl);
+  }, [room?.meetUrl]);
 
   const lockSelectedHour = async () => {
     if (selectedUtcHour === null || !room) return;
@@ -601,7 +647,7 @@ export function BluePlanetApp() {
       `DTSTART:${fmt(start)}`,
       `DTEND:${fmt(end)}`,
       `SUMMARY:Blue Planet Catch-Up (${room.name})`,
-      `DESCRIPTION:Global call scheduled via Blue Planet (Room Code: ${room.code}). Video: ${jitsiMeetingUrl(room.code)}`,
+      `DESCRIPTION:Global call scheduled via Blue Planet (Room Code: ${room.code}). Video: ${room.meetUrl || jitsiMeetingUrl(room.code)}`,
       "END:VEVENT",
       "END:VCALENDAR",
     ].join("\r\n");
@@ -785,14 +831,17 @@ export function BluePlanetApp() {
               </p>
             </div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
-              <button
-                className="btn btn-primary"
-                onClick={() => {
-                  setVideoOpen(true);
-                  showToast("Video room ready — friends with this code join the same call.", "success");
-                }}
-              >
-                {videoOpen ? "Video call open" : "Start video call"}
+              {room.meetUrl ? (
+                <a className="btn btn-primary" href={room.meetUrl} target="_blank" rel="noreferrer">
+                  Join Google Meet
+                </a>
+              ) : (
+                <button className="btn btn-primary" onClick={() => setVideoOpen(true)}>
+                  {videoOpen ? "Video panel open" : "Set up Google Meet"}
+                </button>
+              )}
+              <button className="btn btn-secondary" onClick={() => setVideoOpen(true)}>
+                Video settings
               </button>
               <button
                 className="btn btn-secondary"
@@ -818,7 +867,7 @@ export function BluePlanetApp() {
                     [
                       `Join our Blue Planet room "${room.name}"!`,
                       `Shared Room Code: ${room.code}`,
-                      `Video call: ${videoShareUrl}`,
+                      `Video: ${primaryVideoUrl}`,
                       `Enter the code so we can sync time zones — or jump straight into the video link.`,
                     ].join("\n"),
                   );
@@ -835,37 +884,127 @@ export function BluePlanetApp() {
               <div className="video-panel-head">
                 <div>
                   <h3 style={{ margin: 0, fontFamily: "var(--font-display)", letterSpacing: "-0.03em" }}>
-                    Group video call
+                    Google Meet
                   </h3>
                   <p className="muted" style={{ margin: "0.25rem 0 0" }}>
-                    Free via Jitsi — anyone in room <strong style={{ fontFamily: "var(--font-mono)" }}>{room.code}</strong> lands in the same meeting.
+                    Create a Meet, paste the link once, and everyone in room{" "}
+                    <strong style={{ fontFamily: "var(--font-mono)" }}>{room.code}</strong> can join the same call.
                   </p>
                 </div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
-                  <button
-                    className="btn btn-secondary"
-                    onClick={() => {
-                      copyText(videoShareUrl);
-                      showToast("Video link copied!", "success");
-                    }}
+                <button className="btn btn-ghost" onClick={() => setVideoOpen(false)}>
+                  Hide
+                </button>
+              </div>
+
+              <div className="meet-setup">
+                <div className="meet-steps">
+                  <a
+                    className="btn btn-primary"
+                    href="https://meet.google.com/new"
+                    target="_blank"
+                    rel="noreferrer"
                   >
-                    Copy video link
-                  </button>
-                  <a className="btn btn-secondary" href={videoUrl} target="_blank" rel="noreferrer">
-                    Open in new tab
+                    1. Create Google Meet
                   </a>
-                  <button className="btn btn-ghost" onClick={() => setVideoOpen(false)}>
-                    Hide call
+                  <p className="muted" style={{ margin: "0.55rem 0 0.8rem", color: "rgba(245,251,255,0.72)" }}>
+                    Opens Google Meet in a new tab. Copy the meeting link from your browser address bar
+                    (e.g. meet.google.com/abc-defg-hij), then paste it below.
+                  </p>
+                  <label className="meet-label" htmlFor="meet-url-input">
+                    2. Paste & share with the room
+                  </label>
+                  <div className="meet-row">
+                    <input
+                      id="meet-url-input"
+                      value={meetDraft}
+                      onChange={(e) => setMeetDraft(e.target.value)}
+                      placeholder="https://meet.google.com/abc-defg-hij"
+                      autoComplete="off"
+                    />
+                    <button
+                      className="btn btn-secondary"
+                      disabled={meetBusy || !meetDraft.trim()}
+                      onClick={() => void saveMeetUrl(meetDraft.trim())}
+                    >
+                      {meetBusy ? "Saving…" : "Save for room"}
+                    </button>
+                  </div>
+                </div>
+
+                {room.meetUrl ? (
+                  <div className="meet-ready">
+                    <div>
+                      <strong>Room Meet link</strong>
+                      <div className="muted" style={{ fontFamily: "var(--font-mono)", fontSize: "0.8rem", wordBreak: "break-all" }}>
+                        {room.meetUrl}
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
+                      <a className="btn btn-primary" href={room.meetUrl} target="_blank" rel="noreferrer">
+                        Join Google Meet
+                      </a>
+                      <button
+                        className="btn btn-secondary"
+                        onClick={() => {
+                          copyText(room.meetUrl!);
+                          showToast("Google Meet link copied!", "success");
+                        }}
+                      >
+                        Copy link
+                      </button>
+                      <button
+                        className="btn btn-ghost"
+                        disabled={meetBusy}
+                        onClick={() => void saveMeetUrl(null)}
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="muted" style={{ margin: "0.9rem 0 0", color: "rgba(245,251,255,0.72)" }}>
+                    No Google Meet link saved yet. After you paste one, friends who join this room will see it automatically.
+                  </p>
+                )}
+
+                <div className="jitsi-fallback">
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => setShowJitsi((v) => !v)}
+                  >
+                    {showJitsi ? "Hide quick call (Jitsi)" : "Need a call without Google? Use free Jitsi"}
                   </button>
+                  {showJitsi && (
+                    <div className="jitsi-box">
+                      <p className="muted" style={{ margin: "0 0 0.7rem", color: "rgba(245,251,255,0.72)" }}>
+                        Instant backup meeting for this room code — no Google account required.
+                      </p>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.7rem" }}>
+                        <a className="btn btn-secondary" href={jitsiUrl} target="_blank" rel="noreferrer">
+                          Open Jitsi in new tab
+                        </a>
+                        <button
+                          className="btn btn-secondary"
+                          onClick={() => {
+                            copyText(jitsiShareUrl);
+                            showToast("Jitsi link copied!", "success");
+                          }}
+                        >
+                          Copy Jitsi link
+                        </button>
+                      </div>
+                      <iframe
+                        className="video-frame"
+                        title={`Blue Planet Jitsi ${room.code}`}
+                        src={jitsiUrl}
+                        allow="camera; microphone; fullscreen; display-capture; autoplay; clipboard-write"
+                        allowFullScreen
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
-              <iframe
-                className="video-frame"
-                title={`Blue Planet video call ${room.code}`}
-                src={videoUrl}
-                allow="camera; microphone; fullscreen; display-capture; autoplay; clipboard-write"
-                allowFullScreen
-              />
             </section>
           )}
 
@@ -885,15 +1024,21 @@ export function BluePlanetApp() {
                 </p>
               </div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
-                <button
-                  className="btn btn-primary"
-                  onClick={() => {
-                    setVideoOpen(true);
-                    showToast("Joining the room video call…", "success");
-                  }}
-                >
-                  Join video call
-                </button>
+                {room.meetUrl ? (
+                  <a className="btn btn-primary" href={room.meetUrl} target="_blank" rel="noreferrer">
+                    Join Google Meet
+                  </a>
+                ) : (
+                  <button
+                    className="btn btn-primary"
+                    onClick={() => {
+                      setVideoOpen(true);
+                      showToast("Set a Google Meet link for the room, then friends can join.", "info");
+                    }}
+                  >
+                    Set up Google Meet
+                  </button>
+                )}
                 <button
                   className="btn btn-secondary"
                   onClick={() => {
@@ -902,7 +1047,7 @@ export function BluePlanetApp() {
                         `Blue Planet Group Call: ${room.name}`,
                         `Room Code: ${room.code}`,
                         `Time: ${String(room.lockedUtcHour).padStart(2, "0")}:00 UTC`,
-                        `Video: ${videoShareUrl}`,
+                        `Video: ${primaryVideoUrl}`,
                         "",
                         "Local Times for Everyone:",
                         ...lockedSlot.memberBreakdown.map(
